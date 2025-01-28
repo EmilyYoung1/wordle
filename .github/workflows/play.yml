@@ -2,19 +2,42 @@ name: Play the game
 on:
   issues:
     types: [opened]
+  issue_comment:
+    types: [created]
 jobs:
   playGame:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
     steps:
       - name: checkout repo
         uses: actions/checkout@v4
-      - name: get the target word
+      - name: compute appropriate response
+        id: computeResponse
         continue-on-error: true
         run: |
+          set +e
           LINE=$(echo "$EVENT_ID % $(cat words.txt | wc -l) + 1" | bc)
           TARGET=$(head -n $LINE words.txt | tail -n -1)
           GUESS=$(echo $TITLE | cut -c 1-5)
-          ./wordle.py "$TARGET" "$GUESS"
+          chmod u+x wordle.py
+          ./wordle.py "$TARGET" "$GUESS" > output.txt
+          echo "result_code=$?" >> "$GITHUB_OUTPUT"
         env:
           EVENT_ID: ${{ github.event.issue.id }}
-          TITLE: ${{ github.event.issue.title }}
+          TITLE: ${{ github.event.comment.body || github.event.issue.title }}
+      - name: Add comment if there are errors
+        if: ${{ steps.computeResponse.outputs.result_code == 1 }}
+        run: gh issue comment "$NUMBER" --body-file output.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+      - name: Print congrats and close the issue if correct
+        if: ${{ steps.computeResponse.outputs.result_code == 0 }}
+        run: |
+          gh issue close "$NUMBER" -c "Congrats! That is correct!"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
